@@ -8,6 +8,8 @@
 #include <WiFi.h>
 #include <esp_system.h>
 
+#include "DistanceReader.h"
+
 namespace {
 const uint8_t START_NAME_LENGTH = 8;
 const uint16_t DNS_PORT = 53;
@@ -198,6 +200,7 @@ struct AccessPoint::Impl {
   bool apStarted;
   bool serverStarted;
   bool filesystemStarted;
+  bool staMode;
   bool shutdownPending;
   bool initialized;
   unsigned long shutdownAt;
@@ -207,15 +210,17 @@ struct AccessPoint::Impl {
         apStarted(false),
         serverStarted(false),
         filesystemStarted(false),
+        staMode(false),
         shutdownPending(false),
         initialized(false),
         shutdownAt(0) {}
 };
 
-AccessPoint::AccessPoint() : _impl(new Impl()) {}
+AccessPoint::AccessPoint(DistanceReader& distanceReader)
+    : _impl(new Impl()), _distanceReader(distanceReader) {}
 
 AccessPoint::~AccessPoint() {
-  stopPortal();
+  stopWebServer();
   delete _impl;
 }
 
@@ -247,6 +252,12 @@ bool AccessPoint::begin() {
       Serial.println("STA conectado");
       Serial.print("IP STA: ");
       Serial.println(WiFi.localIP());
+
+      _impl->staMode = true;
+      if (!startWebServer()) {
+        return false;
+      }
+
       _impl->initialized = true;
       return true;
     }
@@ -300,35 +311,69 @@ bool AccessPoint::saveStaCredentials() {
 }
 
 bool AccessPoint::startPortal() {
+  _impl->staMode = false;
+  WiFi.mode(WIFI_AP_STA);
+
+  if (!WiFi.softAP(_impl->apSsid.c_str(), _impl->apPassword.c_str())) {
+    Serial.println("Falha ao iniciar o access point");
+    return false;
+  }
+
+  _impl->apStarted = true;
+
+  const IPAddress apIP = WiFi.softAPIP();
+
+  _impl->dnsServer.start(DNS_PORT, "*", apIP);
+
+  if (!startWebServer()) {
+    WiFi.softAPdisconnect(false);
+    _impl->apStarted = false;
+    if (_impl->filesystemStarted) {
+      LittleFS.end();
+      _impl->filesystemStarted = false;
+    }
+    return false;
+  }
+
+  Serial.println("Access point iniciado");
+  Serial.print("start_name: ");
+  Serial.println(_impl->startName);
+  Serial.print("SSID: ");
+  Serial.println(_impl->apSsid);
+  Serial.print("Senha: ");
+  Serial.println(_impl->apPassword);
+  Serial.print("IP: ");
+  Serial.println(apIP);
+
+  return true;
+}
+
+bool AccessPoint::startWebServer() {
+  if (_impl->serverStarted) {
+    return true;
+  }
+
   if (!LittleFS.begin(false)) {
     Serial.println("Falha ao montar o LittleFS");
     return false;
   }
 
   _impl->filesystemStarted = true;
-  WiFi.mode(WIFI_AP_STA);
-
-  if (!WiFi.softAP(_impl->apSsid.c_str(), _impl->apPassword.c_str())) {
-    Serial.println("Falha ao iniciar o access point");
-    LittleFS.end();
-    _impl->filesystemStarted = false;
-    return false;
-  }
-
-  const IPAddress apIP = WiFi.softAPIP();
-
-  _impl->dnsServer.start(DNS_PORT, "*", apIP);
 
   _impl->server.on("/", HTTP_GET, [this]() {
-    serveFile("/index.html", "text/html");
+    serveFile(_impl->staMode ? "/sta.html" : "/ap.html", "text/html");
   });
 
   _impl->server.on("/style.css", HTTP_GET, [this]() {
     serveFile("/style.css", "text/css");
   });
 
-  _impl->server.on("/app.js", HTTP_GET, [this]() {
-    serveFile("/app.js", "application/javascript");
+  _impl->server.on("/ap.js", HTTP_GET, [this]() {
+    serveFile("/ap.js", "application/javascript");
+  });
+
+  _impl->server.on("/sta.js", HTTP_GET, [this]() {
+    serveFile("/sta.js", "application/javascript");
   });
 
   _impl->server.on("/api/networks", HTTP_GET, [this]() {
@@ -337,6 +382,10 @@ bool AccessPoint::startPortal() {
 
   _impl->server.on("/api/connect", HTTP_POST, [this]() {
     handleConnect();
+  });
+
+  _impl->server.on("/api/distance", HTTP_GET, [this]() {
+    handleDistance();
   });
 
   _impl->server.onNotFound([this]() {
@@ -353,19 +402,7 @@ bool AccessPoint::startPortal() {
   });
 
   _impl->server.begin();
-  _impl->apStarted = true;
   _impl->serverStarted = true;
-
-  Serial.println("Access point iniciado");
-  Serial.print("start_name: ");
-  Serial.println(_impl->startName);
-  Serial.print("SSID: ");
-  Serial.println(_impl->apSsid);
-  Serial.print("Senha: ");
-  Serial.println(_impl->apPassword);
-  Serial.print("IP: ");
-  Serial.println(apIP);
-
   return true;
 }
 
@@ -374,23 +411,31 @@ void AccessPoint::stopPortal() {
     return;
   }
 
-  if (_impl->serverStarted) {
-    _impl->server.stop();
-    _impl->serverStarted = false;
-  }
-
   if (_impl->apStarted) {
     _impl->dnsServer.stop();
     WiFi.softAPdisconnect(false);
     _impl->apStarted = false;
   }
 
+  _impl->shutdownPending = false;
+}
+
+void AccessPoint::stopWebServer() {
+  if (_impl == nullptr) {
+    return;
+  }
+
+  stopPortal();
+
+  if (_impl->serverStarted) {
+    _impl->server.stop();
+    _impl->serverStarted = false;
+  }
+
   if (_impl->filesystemStarted) {
     LittleFS.end();
     _impl->filesystemStarted = false;
   }
-
-  _impl->shutdownPending = false;
 }
 
 void AccessPoint::serveFile(const char* path, const char* contentType) {
@@ -501,6 +546,31 @@ void AccessPoint::handleConnect() {
   _impl->shutdownAt = millis() + PORTAL_SHUTDOWN_DELAY_MS;
 }
 
+void AccessPoint::handleDistance() {
+  if (!_impl->staMode || WiFi.status() != WL_CONNECTED) {
+    _impl->server.send(
+        503,
+        "application/json",
+        "{\"distance\":null,\"error\":\"sta_unavailable\"}");
+    return;
+  }
+
+  const float distance = _distanceReader.readAvgDistance();
+
+  if (distance < 0.0f) {
+    _impl->server.send(
+        200,
+        "application/json",
+        "{\"distance\":null}");
+    return;
+  }
+
+  String response = "{\"distance\":";
+  response += String(distance, 2);
+  response += "}";
+  _impl->server.send(200, "application/json", response);
+}
+
 void AccessPoint::handleClient() {
   if (_impl == nullptr) {
     return;
@@ -515,6 +585,7 @@ void AccessPoint::handleClient() {
       static_cast<long>(millis() - _impl->shutdownAt) >= 0) {
     stopPortal();
     WiFi.mode(WIFI_STA);
+    _impl->staMode = true;
     Serial.println("Access point encerrado; STA mantida");
   }
 }

@@ -52,6 +52,7 @@ float DistanceReader::readDistance() {
 }
 
 float DistanceReader::readAvgDistance() {
+  Serial.println("readAvgDistance:start");
   float sum = 0.0f;
   uint8_t validCount = 0;
 
@@ -69,6 +70,7 @@ float DistanceReader::readAvgDistance() {
   if (validCount == 0) {
     return -1.0f;
   }
+  Serial.println("readAvgDistance:end");
 
   return sum / validCount;
 }

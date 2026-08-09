@@ -30,6 +30,28 @@ h1 {
   font-size: 1.5rem;
 }
 
+.subtitle {
+  margin: -0.75rem 0 1.5rem;
+  color: #52616b;
+}
+
+.distance-card {
+  text-align: center;
+}
+
+.distance-value {
+  margin: 2rem 0 1.5rem;
+  color: #1769aa;
+  font-size: clamp(3rem, 16vw, 5rem);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.distance-value .unit {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
 label {
   display: block;
   margin: 1rem 0 0.4rem;
@@ -82,4 +104,8 @@ button:hover {
 #status {
   min-height: 1.3rem;
   margin-bottom: 0;
+}
+
+#status.error {
+  color: #b42318;
 }

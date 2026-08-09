@@ -14,7 +14,7 @@ DistanceReader leitor(TRIG_PIN,
                       NUM_SAMPLES,
                       INTERVALO_SAMPLE);
 
-AccessPoint accessPoint;
+AccessPoint accessPoint(leitor);
 
 void setup() {
   Serial.begin(115200);

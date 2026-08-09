@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nível de água</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="card distance-card">
+    <h1>Nível de água</h1>
+    <p class="subtitle">Distância medida pelo sensor</p>
+
+    <div class="distance-value" aria-live="polite">
+      <span id="distance">--</span>
+      <span class="unit">cm</span>
+    </div>
+
+    <p id="status" role="status" aria-live="polite">Aguardando leitura...</p>
+  </main>
+
+  <script src="/sta.js" defer></script>
+</body>
+</html>
